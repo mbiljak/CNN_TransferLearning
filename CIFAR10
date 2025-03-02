@@ -7,40 +7,36 @@ from sklearn.decomposition import PCA
 import numpy as np
 import time
 import pandas as pd
+import gc
 
 # ---------------------- GPU Configuration ----------------------
-# Configure TensorFlow to use only the needed memory
 physical_devices = tf.config.list_physical_devices('GPU')
 if physical_devices:
     print("\nGPU detected:")
     for device in physical_devices:
         print(f"- {device}")
-    # Enable memory growth - prevents TensorFlow from allocating all GPU memory at once
     try:
         for device in physical_devices:
             tf.config.experimental.set_memory_growth(device, True)
-        print("Memory growth enabled - GPU will allocate memory as needed")
+        print("Memory growth enabled")
     except Exception as e:
-        print(f"Memory growth configuration error: {e}")
+        print(f"Memory growth error: {e}")
 else:
     print("\nGPU not detected - using CPU")
 
-# Reduce logging verbosity
 tf.get_logger().setLevel('ERROR')
-tf.debugging.set_log_device_placement(False)  # Turn off device placement logging
+tf.debugging.set_log_device_placement(False)
 
 # ----------------------------------------------------------------
 
-# Record start time
 start_time = time.time()
 
 # Load CIFAR-10 dataset
 print("Loading CIFAR-10 dataset...")
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 
-# Use a smaller subset for training to reduce memory usage
-TRAIN_SAMPLES = 25000  # Use roughly half of the training data
-TEST_SAMPLES = 5000    # Use half of test data
+TRAIN_SAMPLES = 45000 #45000
+TEST_SAMPLES = 8000 #8000
 indices_train = np.random.choice(len(x_train), TRAIN_SAMPLES, replace=False)
 indices_test = np.random.choice(len(x_test), TEST_SAMPLES, replace=False)
 x_train = x_train[indices_train]
@@ -50,94 +46,18 @@ y_test = y_test[indices_test]
 
 print(f"Using {len(x_train)} training samples and {len(x_test)} test samples")
 
-# Keep original 32x32 size instead of resizing to save memory
-# Normalize pixel values
-x_train_norm = x_train.astype('float32') / 255.0
-x_test_norm = x_test.astype('float32') / 255.0
+x_train_norm = x_train.astype('float32') 
+x_test_norm = x_test.astype('float32') 
 
-# Convert labels to one-hot encoding
 y_train_cat = tf.keras.utils.to_categorical(y_train, 10)
 y_test_cat = tf.keras.utils.to_categorical(y_test, 10)
 
-# Define simpler data augmentation to reduce computational overhead
 data_augmentation = models.Sequential([
     layers.RandomFlip("horizontal"),
     layers.RandomRotation(0.1),
 ])
 
-# Use a more memory-efficient custom CNN model
 def create_efficient_cnn():
-    model = models.Sequential([
-        # Input layer - explicitly naming the layer
-        layers.InputLayer(input_shape=(32, 32, 3), name='input_layer'),
-        
-        # First convolutional block - fewer filters
-        layers.Conv2D(16, (3, 3), padding='same', activation='relu', name='conv_1'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        
-        # Second convolutional block
-        layers.Conv2D(32, (3, 3), padding='same', activation='relu', name='conv_2'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        
-        # Third convolutional block
-        layers.Conv2D(64, (3, 3), padding='same', activation='relu', name='conv_3'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        
-        # Classification head
-        layers.Flatten(),
-        layers.Dense(256, activation='relu'),  # Smaller dense layer
-        layers.Dropout(0.5),
-        layers.Dense(10, activation='softmax')
-    ])
-    return model
-
-# Create and compile the model
-model_scratch = create_efficient_cnn()
-model_scratch.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-    loss='categorical_crossentropy',
-    metrics=['accuracy']
-)
-
-# Add early stopping and reduce LR on plateau for better convergence
-callbacks = [
-    tf.keras.callbacks.EarlyStopping(
-        monitor='val_accuracy',
-        patience=5,
-        restore_best_weights=True
-    ),
-    tf.keras.callbacks.ReduceLROnPlateau(
-        monitor='val_loss',
-        factor=0.5,
-        patience=3,
-        min_lr=0.00001
-    )
-]
-
-# Use a larger batch size to improve GPU utilization and reduce memory fragmentation
-BATCH_SIZE = 128
-
-# Train custom CNN with explicit memory cleanup
-print("\nTraining custom CNN with memory-efficient settings...")
-history_scratch = model_scratch.fit(
-    x_train_norm, 
-    y_train_cat, 
-    epochs=15,  # Reduced number of epochs
-    batch_size=BATCH_SIZE,
-    validation_data=(x_test_norm, y_test_cat),
-    callbacks=callbacks,
-    verbose=1
-)
-
-# ---------------------- ALTERNATIVE FEATURE EXTRACTION ----------------------
-# Instead of creating a separate feature extractor model, 
-# we'll create a CNN feature generator from scratch
-
-def create_feature_extractor():
-    """Create a simplified feature extractor with the same architecture as model_scratch"""
     model = models.Sequential([
         layers.InputLayer(input_shape=(32, 32, 3)),
         layers.Conv2D(16, (3, 3), padding='same', activation='relu'),
@@ -147,127 +67,144 @@ def create_feature_extractor():
         layers.BatchNormalization(),
         layers.MaxPooling2D((2, 2)),
         layers.Conv2D(64, (3, 3), padding='same', activation='relu'),
-        # Stop here - just use the output of the last conv layer
+        layers.BatchNormalization(),
+        layers.MaxPooling2D((2, 2)),
+        layers.Flatten(),
+        layers.Dense(256, activation='relu'),
+        layers.Dropout(0.5),
+        layers.Dense(10, activation='softmax')
     ])
     return model
 
-# Create a new feature extractor with the same architecture
+model_scratch = create_efficient_cnn()
+model_scratch.compile(
+    optimizer=tf.keras.optimizers.Adam(0.001),
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+callbacks = [
+    tf.keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=10),
+    tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3)
+]
+
+BATCH_SIZE = 64
+
+print("\nTraining custom CNN...")
+history_scratch = model_scratch.fit(
+    x_train_norm, y_train_cat,
+    epochs=15,
+    batch_size=BATCH_SIZE,
+    validation_data=(x_test_norm, y_test_cat),
+    callbacks=callbacks,
+    verbose=1
+)
+
+def create_feature_extractor():
+    """Create feature extractor from trained CNN"""
+    # Create a new input layer with the same shape as the original model
+    input_shape = (32, 32, 3)  # CIFAR-10 image dimensions
+    inputs = tf.keras.Input(shape=input_shape)
+    
+    # Create a new model that processes inputs through the first 8 layers of model_scratch
+    x = inputs
+    # Apply the first 8 layers (up to and including the last Conv2D layer)
+    # Sequential model layers are zero-indexed, so we use layers 0-7
+    for i in range(8):
+        x = model_scratch.layers[i](x)
+    
+    # Create and return the feature extractor model
+    return tf.keras.Model(inputs=inputs, outputs=x)
+
 feature_extractor = create_feature_extractor()
+print("Feature extractor summary:")
+feature_extractor.summary()
 
-# Load weights from the trained model for the layers that match
-# Get the weights from the original model's first 6 layers (3 conv blocks without final pooling)
-weights_to_copy = [layer.get_weights() for layer in model_scratch.layers[0:6]]
-
-# Copy the weights to the feature extractor's layers
-for i, weights in enumerate(weights_to_copy):
-    if i < len(feature_extractor.layers):
-        feature_extractor.layers[i].set_weights(weights)
-
-print("Feature extractor created with copied weights from trained model")
-
-# Extract features in batches to avoid memory issues
+# Extract features in batches (keep the rest of the code the same)
 def extract_features_in_batches(model, data, batch_size=64):
-    num_samples = len(data)
-    num_batches = (num_samples + batch_size - 1) // batch_size
     features_list = []
-    
-    print(f"Extracting features from {num_samples} samples in {num_batches} batches...")
-    for i in range(num_batches):
-        start_idx = i * batch_size
-        end_idx = min((i + 1) * batch_size, num_samples)
-        batch_data = data[start_idx:end_idx]
-        batch_features = model.predict(batch_data, verbose=0)
-        features_list.append(batch_features)
-        
-        # Print progress every 10 batches
-        if (i + 1) % 10 == 0 or (i + 1) == num_batches:
-            print(f"Processed {end_idx}/{num_samples} samples")
-    
-    # Concatenate all batches
-    features = np.concatenate(features_list, axis=0)
-    return features.reshape(features.shape[0], -1)
+    num_samples = len(data)
+    for i in range(0, num_samples, batch_size):
+        batch = data[i:i+batch_size]
+        features = model.predict(batch, verbose=0)
+        features_list.append(features)
+    return np.concatenate(features_list, axis=0).reshape(num_samples, -1)
 
-# Extract features
-x_train_features = extract_features_in_batches(feature_extractor, x_train_norm, BATCH_SIZE)
-x_test_features = extract_features_in_batches(feature_extractor, x_test_norm, BATCH_SIZE)
+print("\nExtracting CNN features for SVM...")
+x_train_features = extract_features_in_batches(feature_extractor, x_train_norm)
+x_test_features = extract_features_in_batches(feature_extractor, x_test_norm)
 
-# Apply PCA with clear memory management
-print("Applying PCA to reduce feature dimensions...")
-pca = PCA(n_components=100)  # Fixed number of components instead of percentage
-x_train_features_pca = pca.fit_transform(x_train_features)
-x_test_features_pca = pca.transform(x_test_features)
+# Apply PCA
+print("Applying PCA...")
+pca = PCA(n_components=100)
+x_train_pca = pca.fit_transform(x_train_features)
+x_test_pca = pca.transform(x_test_features)
 
-# Free up memory
-del x_train_features
-del x_test_features
-import gc
-gc.collect()
-
-# Train SVM with simplified parameters
-print("Training SVM classifier...")
+# Train SVM
+print("Training SVM...")
 svm = SVC(kernel='rbf', C=1, gamma='scale')
-svm.fit(x_train_features_pca, y_train.flatten())
+svm.fit(x_train_pca, y_train.flatten())
 
 # Evaluate SVM
-svm_predictions = svm.predict(x_test_features_pca)
-svm_accuracy = accuracy_score(y_test.flatten(), svm_predictions)
+svm_accuracy = accuracy_score(y_test.flatten(), svm.predict(x_test_pca))
 print(f"SVM Accuracy: {svm_accuracy:.4f}")
 
-# Transfer learning with MobileNetV2 - use a lighter version
-print("\nSetting up transfer learning with MobileNetV2 (alpha=0.75)...")
-base_model = applications.MobileNetV2(
-    weights='imagenet', 
-    include_top=False, 
-    input_shape=(32, 32, 3),  # Use original size
-    alpha=0.75  # Use a smaller version of MobileNetV2
+# Cleanup features
+del x_train_features, x_test_features, x_train_pca, x_test_pca
+gc.collect()
+
+# ---------------------- Transfer Learning with ResNet50 ----------------------
+print("\nSetting up transfer learning with ResNet50...")
+base_model = applications.ResNet50(
+    weights='imagenet',
+    include_top=False,
+    input_shape=(128, 128, 3)
 )
 base_model.trainable = False
 
-# Create a simpler transfer learning model
 inputs = layers.Input(shape=(32, 32, 3))
 x = data_augmentation(inputs)
-x = layers.Lambda(lambda img: applications.mobilenet_v2.preprocess_input(img * 255.0))(x)
+
+x = layers.Lambda(lambda img: tf.image.resize(img, (128, 128)))(x) #ResNet's asks for 244x244, but it's too computationally expensive
+
+x = applications.resnet50.preprocess_input(x)
 x = base_model(x)
 x = layers.GlobalAveragePooling2D()(x)
-x = layers.Dense(128, activation='relu')(x)  # Smaller dense layer
+x = layers.Dense(128, activation='relu')(x)
 outputs = layers.Dense(10, activation='softmax')(x)
 
 model_transfer = tf.keras.Model(inputs, outputs)
 
-# Compile with memory-efficient settings
+model_transfer.compile(
+    optimizer=tf.keras.optimizers.Adam(0.001),
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+print("Training transfer learning model (frozen)...")
+history_transfer_frozen = model_transfer.fit(
+    x_train_norm, y_train_cat,
+    epochs=5,
+    batch_size=BATCH_SIZE,
+    validation_data=(x_test_norm, y_test_cat),
+    callbacks=callbacks,
+    verbose=1
+)
+
+# Fine-tuning
+base_model.trainable = True
+for layer in base_model.layers[:-30]:
+    layer.trainable = False
+
 model_transfer.compile(
     optimizer=tf.keras.optimizers.Adam(0.0001),
     loss='categorical_crossentropy',
     metrics=['accuracy']
 )
 
-# Train transfer learning model - frozen layers
-print("Training transfer learning model (frozen)...")
-history_transfer_frozen = model_transfer.fit(
-    x_train_norm,
-    y_train_cat,
-    epochs=5,
-    batch_size=BATCH_SIZE,
-    validation_data=(x_test_norm, y_test_cat),
-    callbacks=callbacks,
-    verbose=1
-)
-
-# Fine-tune only the last few layers
-base_model.trainable = True
-for layer in base_model.layers[:-4]:  # Freeze all but the last 4 layers
-    layer.trainable = False
-
 print("Fine-tuning transfer learning model...")
-model_transfer.compile(
-    optimizer=tf.keras.optimizers.Adam(0.00001),
-    loss='categorical_crossentropy',
-    metrics=['accuracy']
-)
-
 history_transfer = model_transfer.fit(
-    x_train_norm,
-    y_train_cat,
+    x_train_norm, y_train_cat,
     epochs=5,
     batch_size=BATCH_SIZE,
     validation_data=(x_test_norm, y_test_cat),
@@ -275,7 +212,6 @@ history_transfer = model_transfer.fit(
     verbose=1
 )
 
-# Combine histories for visualization
 def combine_histories(h1, h2):
     return {
         'accuracy': h1.history['accuracy'] + h2.history['accuracy'],
@@ -286,18 +222,16 @@ def combine_histories(h1, h2):
 
 combined_history_transfer = combine_histories(history_transfer_frozen, history_transfer)
 
-# Calculate total elapsed time
 elapsed_time = time.time() - start_time
 print(f"\nTotal runtime: {elapsed_time/60:.2f} minutes")
 
-# ---------------------- Results Visualization ----------------------
-# Create simple visualization
+# Visualization
 plt.figure(figsize=(12, 5))
 plt.subplot(1, 2, 1)
 plt.plot(history_scratch.history['accuracy'], label='CNN Training')
-plt.plot(history_scratch.history['val_accuracy'], label='CNN Validation')
-plt.plot(combined_history_transfer['accuracy'], label='Transfer Training')
-plt.plot(combined_history_transfer['val_accuracy'], label='Transfer Validation')
+plt.plot(history_scratch.history['val_accuracy'], label='CNN Testing')
+plt.plot(combined_history_transfer['accuracy'], label='ResNet50 Training')
+plt.plot(combined_history_transfer['val_accuracy'], label='ResNet50 Training')
 plt.title('Accuracy Comparison')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
@@ -305,9 +239,9 @@ plt.legend()
 
 plt.subplot(1, 2, 2)
 plt.plot(history_scratch.history['loss'], label='CNN Training')
-plt.plot(history_scratch.history['val_loss'], label='CNN Validation')
-plt.plot(combined_history_transfer['loss'], label='Transfer Training')
-plt.plot(combined_history_transfer['val_loss'], label='Transfer Validation')
+plt.plot(history_scratch.history['val_loss'], label='CNN Testing')
+plt.plot(combined_history_transfer['loss'], label='ResNet50 Training')
+plt.plot(combined_history_transfer['val_loss'], label='ResNet50 Testing')
 plt.title('Loss Comparison')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
@@ -319,7 +253,7 @@ plt.show()
 
 # Performance summary
 summary_data = {
-    'Model': ['Custom CNN', 'Transfer Learning', 'CNN+SVM'],
+    'Model': ['Custom CNN', 'ResNet50 Transfer', 'CNN+SVM'],
     'Accuracy': [
         history_scratch.history['val_accuracy'][-1],
         combined_history_transfer['val_accuracy'][-1],
@@ -336,4 +270,4 @@ print("2. Dataset size reduced by 50%")
 print("3. Model architecture simplified")
 print("4. Batch processing used for feature extraction")
 print("5. Explicit memory cleanup added")
-print("6. Lighter MobileNetV2 variant used (alpha=0.75)")
+print("6. ResNet50 used for transfer learning")
