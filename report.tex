@@ -1,0 +1,144 @@
+\documentclass[12pt]{article}
+
+% Packages
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% Header and footer setup
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{mbiljak@uwo.ca}
+\lhead{AISE 3010b Assignment 2}
+\rfoot{\thepage}
+
+% Custom commands
+\newcommand{\dataseturl}[1]{\href{#1}{\texttt{#1}}}
+
+\begin{document}
+
+\begin{center}
+    \Large\textbf{AISE 3010b Assignment 2} \\[0.5cm]
+    \large CNN Implementation and Transfer Learning \\[1cm]
+    
+    \normalsize
+    Marcus Biljak \\
+    251303986 \\
+    \today
+\end{center}
+
+
+\section{Neural Architecture Description}
+This implementation explores three approaches for CIFAR-10 image classification: a custom CNN, transfer learning with ResNet50, and a hybrid CNN+SVM model.
+
+\subsection{Custom CNN Model}
+A lightweight CNN with five convolutional layers progressively increasing in filters (16, 32, 64, 128, 256). Each layer uses 3\texttimes3 filters, ReLU activation, batch normalization, and max pooling (except the third and fourth layers). The network flattens feature maps, passing them through a fully connected layer (256 neurons, ReLU, 50\% dropout) before a 10-class softmax output. Adam optimizer (lr=0.001) with early stopping and learning rate scheduling optimizes training.
+
+\subsection{Transfer Learning Approach}
+Utilizing a pre-trained ResNet50, CIFAR-10 images are resized to 128\texttimes128. The top classification layers are replaced with global average pooling, a 128-neuron dense layer (ReLU), and a 10-class softmax output. Training follows a two-phase strategy: initially freezing ResNet50 while training the custom head (lr=0.001), followed by fine-tuning the last 30 layers (lr=0.0001).
+
+\subsection{CNN+SVM Hybrid Model}
+Mid-level features from the custom CNN (first 8 layers) are extracted and flattened. PCA reduces dimensionality to 100 components before classification using an SVM with an RBF kernel (C=1, gamma='scale'). This method assesses traditional machine learning’s ability to leverage deep-learning-derived features.
+
+\section{Dataset Description}
+CIFAR-10 contains 60,000 32\texttimes32 RGB images across 10 classes. A subset was used:
+\begin{itemize}
+    \item Training: 45,000 images, Testing: 8,000 images
+    \item Images resized to 128\texttimes128 for ResNet50
+    \item Preprocessing: normalization (0-1 range), data augmentation (flips, rotations), one-hot encoding
+\end{itemize}
+Data augmentation enhances model robustness by exposing networks to diverse variations without additional data collection.
+
+\begin{itemize}
+    \item Training set: 45,000 randomly sampled images (from the original 50,000)
+    \item Test set: 8,000 randomly sampled images (from the original 10,000)
+    \item Image dimensions: 32×32×3 (RGB) for the custom CNN and CNN+SVM approaches
+    \item Resized to 128×128×3 for the ResNet50 transfer learning approach
+\end{itemize}
+
+The preprocessing pipeline included:
+\begin{itemize}
+    \item Normalization: Converting pixel values to floating-point (0-1 range)
+    \item Data augmentation: Random horizontal flips and rotations (±10°)
+    \item Label encoding: One-hot encoding for neural network models
+\end{itemize}
+
+The data augmentation strategy enhances model robustness by exposing the networks to variations in the training samples, helping prevent overfitting without requiring additional data collection.
+
+\section{Results Analysis}
+\subsection{Custom CNN Performance}
+The custom CNN achieved a final validation accuracy of 76.7\% after 15 epochs of training. The model showed consistent improvement in training accuracy from 34.7\% in epoch 1 to 88.2\% in the final epoch, while validation accuracy increased from 57.1\% to 76.7\%.
+
+Notable observations:
+\begin{itemize}
+    \item Learning rate reduction triggered after epochs 8 and 12 (from 0.001 to 0.00025)
+    \item Significant gap between training (88.2\%) and validation (76.7\%) accuracies indicates some overfitting
+    \item The model achieved most of its performance by epoch 9, with diminishing returns thereafter
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{terminal 1.png}
+    \caption{Terminal output showing training progress of the custom CNN model}
+    \label{fig:scratch_terminal}
+\end{figure}
+
+\subsection{Transfer Learning Performance}
+The ResNet50 transfer learning approach demonstrated superior performance, achieving 92.9\% validation accuracy in just 10 epochs total (5 for initial training and 5 for fine-tuning):
+
+\begin{itemize}
+    \item Initial phase (frozen base): Validation accuracy improved from 86.2\% to 88.0\% in 5 epochs
+    \item Fine-tuning phase: Further improvement to 92.9\% validation accuracy
+    \item Training accuracy reached 94.9\% in the final epoch
+\end{itemize}
+
+The smaller gap between training and validation accuracies (2.0\%) suggests better regularization and generalization compared to the custom CNN.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{terminal 3.png}
+    \caption{Terminal output showing training progress of the ResNet50 transfer learning model}
+    \label{fig:transfer_terminal}
+\end{figure}
+
+\subsection{CNN+SVM Hybrid Model}
+The CNN+SVM approach achieved 75.8\% accuracy, slightly lower than the end-to-end custom CNN's 76.7\%. This suggests that while the CNN features provide valuable representations, the end-to-end neural network approach maintains a small advantage in this case. The SVM approach required additional dimensionality reduction through PCA, which may have discarded some discriminative information.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{terminal 2.png}
+    \caption{Feature extractor from the trained CNN for use with SVM}
+    \label{fig:comparison}
+\end{figure}
+
+
+\subsection{Comparative Analysis}
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{accuracy+loss graphs.png}
+    \caption{Performance summary of all three approaches}
+    \label{fig:comparison_terminal}
+\end{figure}
+
+The comparative analysis highlights several key insights. Transfer learning significantly outperformed the custom CNN, achieving 92.9\% accuracy compared to 76.7\%. Despite its larger model size, ResNet50 exhibited faster convergence. The CNN+SVM hybrid approach performed slightly worse than the end-to-end CNN, with accuracies of 75.8\% and 76.7\%, respectively. However, the computational cost of transfer learning was considerably higher, with training time increasing from 8 minutes for the custom CNN to approximately 60 minutes for ResNet50. These results emphasize the trade-off between model performance and computational efficiency—while transfer learning provides substantial accuracy improvements, it demands significantly greater training time and resources.
+
+\section{Suggestions for Improvement}
+Several strategies could enhance model performance across all approaches. For the custom CNN, increasing model capacity by adding more convolutional layers or filters, implementing residual connections for deeper architectures, and exploring more aggressive regularization techniques could help address the training-validation gap. Additionally, incorporating more sophisticated data augmentation strategies tailored to CIFAR-10 may improve generalization.
+
+For the transfer learning approach, using the full 224×224 input resolution could maximize the potential of ResNet50. Also, Progressive unfreezing of layers during fine-tuning may improve adaptation to the CIFAR-10 dataset.
+
+The CNN+SVM hybrid approach could benefit from extracting features from multiple layers to capture both low-level and high-level representations. Alternative dimensionality reduction techniques such as t-SNE or UMAP may improve feature selection, while ensemble methods that combine predictions from all three approaches could enhance classification accuracy. Additionally, implementing feature selection techniques could help identify the most discriminative CNN features for SVM classification.
+
+\section{Memory Constraints}
+To address memory constraints, several optimization strategies were applied, including GPU memory growth management, dataset size reduction, simplified architectures, batch processing for feature extraction, explicit memory cleanup, and resizing images to 128×128 instead of 224×224 for ResNet50. These optimizations ensured that models could run efficiently on limited hardware while maintaining competitive performance.
+
+\end{document}
